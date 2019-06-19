@@ -1,0 +1,179 @@
+---
+title: "Carte chaleur"
+author: "Ali & Alexandre"
+date: "14/06/2019"
+output: 
+  html_document: 
+    toc: yes
+---
+# Dataviz : Cartes de chaleur
+
+
+### Remember : les données de la pollution en région centre;
+     → Longues lignes de données difficiles à comprendre
+     → Des séries de valeurs espacées
+
+En effet, il est impossible de couvrir tous les points de la ville ou d’une région (raison technique, financement...)
+
+Pour nous faciliter la vie --→ Heatmap
+
+* Une représentation graphique de données statistiques
+
+* Ce procédé permet de fournir, à des données multiples, un aspect visuel plus facile à saisir qu'un tableau de chiffres
+
+* Une carte de chaleur est une carte montrant la densité ou l’amplitude d’une information relative à une donnée ou une variable
+
+* Encodage de l'intensité d'une variable par une gamme de tons ou un nuancier de couleurs sur une matrice à 2D
+
+* Permet d’étendre une information à des points ou zones inconnues
+
+### L’interpolation 
+    L’interpolation est un calcul qui consiste, à partir d’une série de valeurs espacées,  à estimer de nouvelles valeurs intermédiaires correspondant à un caractère, (sans effectuer de mesure) d'une des deux variables étudiées.
+
+### Principe
+
+Loi de Tobler « Tout interagit avec tout, mais deux objets proches ont plus de chances de le faire que deux objets éloignés »
+
+À partir des points de pollution mesurée, on détermine la pollution d’une surface donnée.
+Pour les tables de données on calcule le coefficient de corrélation pour déduire la matrice de corrélation qui nous permet de réaliser une heatmap.
+
+# Carte Leaflet
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Librairies
+
+```{r Librairies, message=FALSE, warning=FALSE}
+library(leaflet)
+library(data.table)
+library(httr)
+library(jsonlite)
+library(rgdal)
+library(sp)
+library(dplyr)
+library(KernSmooth)
+library(htmlwidgets)
+library(htmltools)
+require(devtools)
+devtools::install_github(repo = 'rCarto/photon')
+```
+
+## Appel API
+
+```{r API, message=FALSE}
+MensuelGeoJson<-"https://services1.arcgis.com/HzzPcgRsxxyIZdlU/arcgis/rest/services/mes_centre_val_de_loire_mensuel_poll_princ_1/FeatureServer/0/query?where=1%3D1&outFields=*&outSR=4326&f=json"
+MensuelGET<-httr::GET(MensuelGeoJson) 
+Mensuelcontent <- httr::content(MensuelGET)
+MensuelFROM <- jsonlite::fromJSON(Mensuelcontent, flatten = TRUE)
+Mensuelfeatures<-as.data.frame(MensuelFROM$features)
+Dataframe<-Mensuelfeatures %>%
+  dplyr::group_by(attributes.nom_com,attributes.nom_polluant,geometry.x,geometry.y) %>%
+  dplyr::summarise(moyenne=mean(attributes.valeur))
+```
+
+
+## Longitudes et latitudes pour polluant O3
+```{r O3}
+O3<-dplyr::filter(Dataframe, attributes.nom_polluant=="O3")
+LongiO3<-O3$geometry.x
+LattiO3<-O3$geometry.y
+longitudeCentre<-1.732406
+lattitudeCentre<-47.54903
+Dataframe <- as.data.table(Dataframe)
+```
+
+#Contours zone et niveaux
+```{r Contour}
+kde <- bkde2D(Dataframe[ , list(LongiO3, LattiO3)],
+              bandwidth=c(.0045, .0068), gridsize = c(500,500))
+CL<-contourLines(kde$x1 , kde$x2 , kde$fhat)
+LEVS <- as.factor(sapply(CL, `[[`, "level"))
+NLEV <- length(levels(LEVS))
+```
+
+
+## Convertion des contours en polygones
+```{r Polygones}
+Polygones <- lapply(1:length(CL), function(i)
+  Polygons(list(Polygon(cbind(CL[[i]]$x, CL[[i]]$y))), ID=i))
+SpPol = SpatialPolygons(Polygones)
+```
+
+
+## Création carte avec contours de la région et zones
+```{r Création, message=FALSE, warning=FALSE}
+carteCentre<-rgdal::readOGR(dsn = "region-centre-val-de-loire.geojson")
+
+carte <- leaflet(SpPol) %>% addTiles() %>% 
+  addPolygons(color = heat.colors(NLEV, NULL)[LEVS], popup = "Ozone (O3)")%>%
+  leaflet::addTiles() %>%
+  leaflet::setView(lng = longitudeCentre, lat = lattitudeCentre, zoom = 7.3) %>%
+  leaflet::addPolygons(data=carteCentre, fill = FALSE, color = "red")
+```
+
+## Sauvegarde et affichage de la carte
+```{r Sauvegarde et affichage}
+htmlwidgets::saveWidget(widget=carte, file="O3.html", selfcontained = TRUE)
+htmltools::tags$iframe(title="Ozone", width = "900", height = "600", src = "O3.html")
+```
+
+## Autre exemple
+Carte issue de stackexchange.com
+(https://gis.stackexchange.com/questions/168886/r-how-to-build-heatmap-with-the-leaflet-package)
+
+```{r warning=FALSE}
+## INITIALIZE
+library("leaflet")
+library("data.table")
+library("sp")
+library("rgdal")
+# library("maptools")
+library("KernSmooth")
+
+inurl <- "https://data.cityofchicago.org/api/views/22s8-eq8h/rows.csv?accessType=DOWNLOAD"
+infile <- "mvthefts.csv"
+
+## LOAD DATA
+## Also, clean up variable names, and convert dates
+if(!file.exists(infile)){
+  download.file(url = inurl, destfile = infile)
+}
+dat <- data.table::fread(infile)
+setnames(dat, tolower(colnames(dat)))
+setnames(dat, gsub(" ", "_", colnames(dat)))
+dat <- dat[!is.na(longitude)]
+dat[ , date := as.IDate(date, "%m/%d/%Y")]
+
+## MAKE CONTOUR LINES
+## Note, bandwidth choice is based on MASS::bandwidth.nrd()
+kde <- bkde2D(dat[ , list(longitude, latitude)],
+              bandwidth=c(.0045, .0068), gridsize = c(100,100))
+CL <- contourLines(kde$x1 , kde$x2 , kde$fhat)
+
+## EXTRACT CONTOUR LINE LEVELS
+LEVS <- as.factor(sapply(CL, `[[`, "level"))
+NLEV <- length(levels(LEVS))
+
+## CONVERT CONTOUR LINES TO POLYGONS
+pgons <- lapply(1:length(CL), function(i)
+  Polygons(list(Polygon(cbind(CL[[i]]$x, CL[[i]]$y))), ID=i))
+spgons = SpatialPolygons(pgons)
+
+## Leaflet map with polygons
+#leaflet(spgons) %>% addTiles() %>% 
+#  addPolygons(color = heat.colors(NLEV, NULL)[LEVS])
+
+## Leaflet map with polygons, using Spatial Data Frame
+## Initially I thought that the data frame structure was necessary
+## This seems to give the same results, but maybe there are some 
+## advantages to using the data.frame, e.g. for adding more columns
+spgonsdf = SpatialPolygonsDataFrame(Sr = spgons,
+                                    data = data.frame(level = LEVS),
+                                    match.ID = TRUE)
+leaflet() %>% addTiles() %>%
+  addPolygons(data = spgonsdf,
+              color = heat.colors(NLEV, NULL)[spgonsdf@data$level])
+
+```

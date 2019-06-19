@@ -1,0 +1,69 @@
+---
+title: "Heatmap Ozone"
+author: "Ali & Alexandre"
+date: "14/06/2019"
+output: 
+  html_document: 
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Heatmap avec librairie heatmaply
+```{r Librairies, message=FALSE, warning=FALSE}
+library(leaflet)
+library(plotly)
+library(ggplot2)
+library(httr)
+library(jsonlite)
+library(rgdal)
+library(sp)
+library(dplyr)
+library(heatmaply)
+library(htmlwidgets)
+library(htmltools)
+require(devtools)
+devtools::install_github(repo = 'rCarto/photon')
+```
+
+
+## Appel API
+```{r Appel API, message=FALSE, warning=FALSE}
+MensuelGeoJson<-"https://services1.arcgis.com/HzzPcgRsxxyIZdlU/arcgis/rest/services/mes_centre_val_de_loire_mensuel_poll_princ_1/FeatureServer/0/query?where=1%3D1&outFields=*&outSR=4326&f=json"
+MensuelGET<-httr::GET(MensuelGeoJson) 
+Mensuelcontent <- httr::content(MensuelGET)
+MensuelFROM <- jsonlite::fromJSON(Mensuelcontent, flatten = TRUE)
+Mensuelfeatures<-as.data.frame(MensuelFROM$features)
+Dataframe<-Mensuelfeatures %>%
+  dplyr::group_by(attributes.nom_com,attributes.nom_polluant,geometry.x,geometry.y) %>%
+  dplyr::summarise(moyenne=mean(attributes.valeur))
+```
+
+
+## Préparation des données O3 pour la matrice
+```{r Preparation matrice, message=FALSE, warning=FALSE}
+O3<-dplyr::filter(Dataframe, attributes.nom_polluant=="O3")
+rownames(O3)<-O3$attributes.nom_com
+
+```
+
+
+## Création de la matrice et de la carte 03
+```{r Creation carte, warning=FALSE}
+O3matrix<-data.matrix(O3)
+O3matrix<-O3matrix[ ,c(1,5)]
+names(O3matrix)<- c("commune","moyenne")
+heatmapO3<-heatmap(O3matrix, Rowv=NA, Colv=NA, col = heat.colors(256), scale="column", margins=c(5,10))
+#print(heatmapO3)
+```
+## Références
+
+https://openclassrooms.com/fr/courses/5248881-analysez-des-donnees-pour-prendre-des-decisions-de-design/5814111-visualisez-les-donnees-grace-a-des-outils-numeriques
+
+https://gis.stackexchange.com/questions/168886/r-how-to-build-heatmap-with-the-leaflet-package
+
+https://www.displayr.com/how-to-create-a-correlation-matrix-in-r/
+
+https://flowingdata.com/2010/01/21/how-to-make-a-heatmap-a-quick-and-easy-solution/
